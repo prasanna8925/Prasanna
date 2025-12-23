@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 
 from fastapi import FastAPI, HTTPException
@@ -19,19 +20,23 @@ LANGCHAIN_API_KEY = os.getenv("LANGCHAIN_API_KEY")
 LANGCHAIN_PROJECT = os.getenv("LANGCHAIN_PROJECT")
 
 if not GROQ_API_KEY:
-    raise RuntimeError("GROQ_API_KEY not set in .env")
+    raise RuntimeError("GROQ_API_KEY not set in environment")
 
 os.environ["LANGCHAIN_API_KEY"] = LANGCHAIN_API_KEY or ""
 os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT or "portfolio-assistant"
+os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT or "prasanna-portfolio-assistant"
 
 # -----------------------------
-# FastAPI app
+# FastAPI App
 # -----------------------------
-app = FastAPI(title="Vigneshwaran Portfolio Assistant API")
+app = FastAPI(
+    title="Prasanna Portfolio Assistant API",
+    version="1.0.0"
+)
 
 origins = [
     "https://prasanna-chatbot.vercel.app",
+    "http://localhost:3000"
 ]
 
 app.add_middleware(
@@ -50,24 +55,48 @@ class AssistantRequest(BaseModel):
 
 class AssistantResponse(BaseModel):
     reply: str
+    status: str
 
 # -----------------------------
-# Load portfolio data
+# Load Portfolio Data
 # -----------------------------
 with open("portfolio_data.json", "r", encoding="utf-8") as f:
     portfolio_data = f.read()
 
-# Escape braces to avoid LC template conflicts
+# Escape braces for LangChain template safety
 portfolio_data = portfolio_data.replace("{", "{{").replace("}", "}}")
 
 # -----------------------------
-# Output sanitizer (safety net)
+# Output Sanitizer
 # -----------------------------
 def clean_output(text: str) -> str:
-    forbidden_tokens = ["**", "*", "|", "#", "__", "~~"]
-    for token in forbidden_tokens:
-        text = text.replace(token, "")
+    if not text:
+        return ""
+
+    # Remove markdown & symbols
+    text = re.sub(r"[*#_|`~]", "", text)
+
+    # Normalize newlines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
     return text.strip()
+
+# -----------------------------
+# Out-of-Scope Guard
+# -----------------------------
+OUT_OF_SCOPE_KEYWORDS = [
+    "programming",
+    "framework",
+    "tech stack",
+    "machine learning",
+    "ai model",
+    "research",
+    "deep learning"
+]
+
+def is_out_of_scope(message: str) -> bool:
+    message = message.lower()
+    return any(keyword in message for keyword in OUT_OF_SCOPE_KEYWORDS)
 
 # -----------------------------
 # LLM Setup (Groq)
@@ -75,66 +104,44 @@ def clean_output(text: str) -> str:
 llm = ChatGroq(
     groq_api_key=GROQ_API_KEY,
     model="openai/gpt-oss-120b",
-    temperature=0.3,
-    max_tokens=1024,
+    temperature=0.2,
+    max_tokens=512,
 )
 
 SYSTEM_PROMPT = f"""
-You are Vigneshwaran CJ’s AI Portfolio Assistant.
+You are Prasanna’s AI Portfolio Assistant.
 
-Your role is to represent Vigneshwaran CJ accurately, professionally, and clearly to visitors of his portfolio website.
+You represent Prasanna accurately and professionally to visitors of his portfolio website.
 
-====================
 CORE RESPONSIBILITIES
-====================
-- Answer questions about skills, projects, research, experience, and tools
-- Explain technical topics clearly and concisely
-- Adjust depth based on the user’s question
-- Only use information present in the portfolio data
+- Answer questions about Prasanna’s professional background
+- Explain his digital marketing skills and experience
+- Summarize work experience, tools, and achievements
+- Use only the provided portfolio data
 
-====================
 COMMUNICATION STYLE
-====================
-- Professional and factual
-- Clear and structured
-- Concise, without unnecessary verbosity
-- Neutral and accurate
+- Clear and professional
+- Short paragraphs suitable for chat UI
+- Bullet points using hyphens when listing
+- No unnecessary verbosity
 
-====================
 INFORMATION BOUNDARIES
-====================
-- Do not invent or assume information
-- If information is unavailable, state that clearly
-- Do not provide personal opinions or speculation
-- Do not impersonate Vigneshwaran CJ in first person
+- Do not invent information
+- If something is unavailable, say so clearly
+- Do not speak in first person
+- Do not provide personal opinions
 
-====================
-OUTPUT FORMATTING RULES (STRICT)
-====================
-- Use plain text only
-- Do not use tables
-- Do not use markdown formatting
-- Do not use bold, italics, headings, or symbols such as *, **, #, |, _
-- Bullet points are allowed only using hyphens (-)
-- Use line breaks for readability
-- Keep responses suitable for a chat UI
+OUTPUT RULES (STRICT)
+- Plain text only
+- No markdown or tables
+- No symbols like *, #, _, |
+- Bullet points only with hyphens
+- Line breaks allowed
 
-Allowed example:
-Skills overview:
-- Programming languages: Python, JavaScript
-- Backend frameworks: FastAPI, Node.js
-
-Disallowed:
-- Tables
-- Markdown formatting
-- Emphasis symbols
-
-====================
-DEFAULT RESPONSE STRATEGY
-====================
-- Start with a short, direct summary
-- Follow with clean bullet points if listing items
-- Avoid long paragraphs unless explicitly requested
+DEFAULT RESPONSE STRUCTURE
+- One-line summary
+- Bullet points if applicable
+- Avoid long paragraphs
 
 Portfolio data:
 {portfolio_data}
@@ -155,7 +162,7 @@ assistant_chain = prompt | llm | parser
 # -----------------------------
 @app.get("/")
 def health_check():
-    return {"status": "Groq Portfolio Assistant running"}
+    return {"status": "Prasanna Portfolio Assistant running"}
 
 @app.post("/api/assistant", response_model=AssistantResponse)
 async def assistant_endpoint(payload: AssistantRequest):
@@ -164,6 +171,17 @@ async def assistant_endpoint(payload: AssistantRequest):
     if not user_message:
         raise HTTPException(status_code=400, detail="Message is required")
 
+    # Handle out-of-scope questions
+    if is_out_of_scope(user_message):
+        return AssistantResponse(
+            reply=(
+                "Prasanna’s portfolio focuses on digital marketing, campaign execution, "
+                "and performance optimization. Technical development or research details "
+                "are not part of the available information."
+            ),
+            status="success"
+        )
+
     try:
         raw_reply = assistant_chain.invoke(
             {"user_message": user_message}
@@ -171,11 +189,17 @@ async def assistant_endpoint(payload: AssistantRequest):
 
         reply = clean_output(raw_reply)
 
-        return AssistantResponse(reply=reply)
+        if not reply:
+            reply = "I do not have enough information to answer that question."
+
+        return AssistantResponse(
+            reply=reply,
+            status="success"
+        )
 
     except Exception as exc:
         print("Groq error:", exc)
-        raise HTTPException(
-            status_code=500,
-            detail="Failed to generate assistant response"
+        return AssistantResponse(
+            reply="I am unable to respond at the moment. Please try again shortly.",
+            status="error"
         )
