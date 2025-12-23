@@ -31,7 +31,7 @@ os.environ["LANGCHAIN_PROJECT"] = LANGCHAIN_PROJECT or "portfolio-assistant"
 app = FastAPI(title="Vigneshwaran Portfolio Assistant API")
 
 origins = [
-    "https://vigneshwarancj-portfolio-website.vercel.app",
+    "https://prasanna-chatbot.vercel.app",
 ]
 
 app.add_middleware(
